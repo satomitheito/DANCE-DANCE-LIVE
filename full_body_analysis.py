@@ -1,70 +1,22 @@
 #!/usr/bin/env python3
 """
-Full Body Analysis Script using PyTorch and MediaPipe
-Analyzes video for pose landmarks and creates visualizations with markers
+Full Body Analysis Script using MediaPipe
+Analyzes video for pose landmarks and creates annotated video with markers
 """
 
 import cv2
 import mediapipe as mp
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 import os
 from typing import List, Tuple, Dict, Optional
 import json
 from datetime import datetime
 
 
-class PoseLandmarkDataset(Dataset):
-    """PyTorch Dataset for pose landmark data"""
-    
-    def __init__(self, landmarks_data: List[np.ndarray], labels: Optional[List[int]] = None):
-        self.landmarks_data = landmarks_data
-        self.labels = labels if labels is not None else [0] * len(landmarks_data)
-    
-    def __len__(self):
-        return len(self.landmarks_data)
-    
-    def __getitem__(self, idx):
-        landmarks = torch.FloatTensor(self.landmarks_data[idx].flatten())
-        label = torch.LongTensor([self.labels[idx]])
-        return landmarks, label
-
-
-class PoseAnalyzer(nn.Module):
-    """PyTorch neural network for pose analysis"""
-    
-    def __init__(self, input_size: int = 99, hidden_size: int = 128, num_classes: int = 10):
-        super(PoseAnalyzer, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.num_classes = num_classes
-        
-        # Define the network architecture
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size // 2)
-        self.fc3 = nn.Linear(hidden_size // 2, num_classes)
-        self.dropout = nn.Dropout(0.3)
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(dim=1)
-    
-    def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
-        x = self.fc3(x)
-        return self.softmax(x)
-
-
 class FullBodyAnalyzer:
-    """Main class for full body analysis using MediaPipe and PyTorch"""
+    """Main class for full body analysis using MediaPipe"""
     
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self):
         # Initialize MediaPipe
         self.mp_pose = mp.solutions.pose
         self.mp_drawing = mp.solutions.drawing_utils
@@ -79,38 +31,9 @@ class FullBodyAnalyzer:
             min_tracking_confidence=0.5
         )
         
-        # Initialize PyTorch model
-        self.model = PoseAnalyzer()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model.to(self.device)
-        
-        # Load model if path provided
-        if model_path and os.path.exists(model_path):
-            self.load_model(model_path)
-        
         # Data storage
         self.landmarks_data = []
         self.frame_data = []
-        
-    def load_model(self, model_path: str):
-        """Load a pre-trained PyTorch model"""
-        try:
-            checkpoint = torch.load(model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
-            print(f"Model loaded from {model_path}")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-    
-    def save_model(self, model_path: str):
-        """Save the current model state"""
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'input_size': self.model.input_size,
-            'hidden_size': self.model.hidden_size,
-            'num_classes': self.model.num_classes
-        }, model_path)
-        print(f"Model saved to {model_path}")
     
     def extract_landmarks(self, frame: np.ndarray) -> Optional[np.ndarray]:
         """Extract pose landmarks from a single frame"""
@@ -288,12 +211,10 @@ class FullBodyAnalyzer:
                         'metrics': pose_metrics,
                         'timestamp': frame_count / fps
                     }
-                    print("landmarks detected")
                     analysis_results['frame_analysis'].append(frame_analysis)
                     
                 else:
                     # No landmarks detected, use original frame
-                    print("No landmarks detected")
                     annotated_frame = frame.copy()
                     cv2.putText(annotated_frame, "No pose detected", (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
@@ -330,93 +251,6 @@ class FullBodyAnalyzer:
         print(f"Video processing complete. Output saved to: {output_path}")
         return analysis_results
     
-    def create_pose_visualization(self, landmarks: np.ndarray, 
-                                 save_path: Optional[str] = None) -> plt.Figure:
-        """Create a 3D visualization of pose landmarks"""
-        fig = plt.figure(figsize=(12, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        if landmarks is not None:
-            # Plot landmarks
-            x = landmarks[:, 0]
-            y = landmarks[:, 1]
-            z = landmarks[:, 2]
-            
-            # Color by visibility
-            colors = landmarks[:, 2]  # Use z-coordinate (visibility) as color
-            
-            scatter = ax.scatter(x, y, z, c=colors, cmap='viridis', s=50, alpha=0.7)
-            
-            # Add connections
-            connections = self.mp_pose.POSE_CONNECTIONS
-            for connection in connections:
-                start_idx, end_idx = connection
-                if (start_idx < len(landmarks) and end_idx < len(landmarks) and
-                    landmarks[start_idx][2] > 0.5 and landmarks[end_idx][2] > 0.5):
-                    
-                    ax.plot([x[start_idx], x[end_idx]], 
-                           [y[start_idx], y[end_idx]], 
-                           [z[start_idx], z[end_idx]], 'b-', alpha=0.6)
-            
-            # Add landmark labels
-            for i, (x_val, y_val, z_val) in enumerate(zip(x, y, z)):
-                if z_val > 0.5:  # Only label visible landmarks
-                    ax.text(x_val, y_val, z_val, str(i), fontsize=8)
-        
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z (Visibility)')
-        ax.set_title('3D Pose Landmarks Visualization')
-        
-        plt.colorbar(scatter, label='Visibility Score')
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"3D visualization saved to: {save_path}")
-        
-        return fig
-    
-    def train_pose_classifier(self, epochs: int = 100, learning_rate: float = 0.001):
-        """Train a simple pose classifier using the collected landmarks data"""
-        if len(self.landmarks_data) < 10:
-            print("Not enough landmarks data for training. Need at least 10 samples.")
-            return
-        
-        # Create dummy labels for demonstration (in real use, you'd have actual labels)
-        labels = [i % 3 for i in range(len(self.landmarks_data))]  # 3 classes
-        
-        # Create dataset and dataloader
-        dataset = PoseLandmarkDataset(self.landmarks_data, labels)
-        dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
-        
-        # Setup training
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
-        
-        self.model.train()
-        
-        print(f"Training pose classifier for {epochs} epochs...")
-        
-        for epoch in range(epochs):
-            total_loss = 0
-            for batch_landmarks, batch_labels in dataloader:
-                batch_landmarks = batch_landmarks.to(self.device)
-                batch_labels = batch_labels.squeeze().to(self.device)
-                
-                optimizer.zero_grad()
-                outputs = self.model(batch_landmarks)
-                loss = criterion(outputs, batch_labels)
-                loss.backward()
-                optimizer.step()
-                
-                total_loss += loss.item()
-            
-            if epoch % 20 == 0:
-                avg_loss = total_loss / len(dataloader)
-                print(f"Epoch {epoch}, Average Loss: {avg_loss:.4f}")
-        
-        print("Training completed!")
-        self.model.eval()
 
 
 def main():
@@ -427,7 +261,6 @@ def main():
     # Input and output paths
     input_video = "/Users/satomi/Documents/GitHub/DANCE-DANCE-LIVE/downloads/test.mp4"
     output_video = "/Users/satomi/Documents/GitHub/DANCE-DANCE-LIVE/analyzed_pose_video.mp4"
-    output_visualization = "/Users/satomi/Documents/GitHub/DANCE-DANCE-LIVE/pose_visualization.png"
     
     # Check if input video exists
     if not os.path.exists(input_video):
@@ -446,27 +279,8 @@ def main():
         print(f"Pose detection rate: {results['overall_metrics']['pose_detection_rate']:.2%}")
         print(f"Average visibility score: {results['overall_metrics']['average_visibility']:.3f}")
         
-        # Create 3D visualization if we have landmarks
-        if analyzer.landmarks_data:
-            print("\nCreating 3D pose visualization...")
-            fig = analyzer.create_pose_visualization(
-                analyzer.landmarks_data[0],  # Use first frame's landmarks
-                output_visualization
-            )
-            plt.show()
-        
-        # Train a simple classifier (optional)
-        if len(analyzer.landmarks_data) > 10:
-            print("\nTraining pose classifier...")
-            analyzer.train_pose_classifier(epochs=50)
-            
-            # Save the trained model
-            model_path = "/Users/satomi/Documents/GitHub/DANCE-DANCE-LIVE/pose_model.pth"
-            analyzer.save_model(model_path)
-        
         print(f"\nAnalysis complete! Check the following files:")
         print(f"- Annotated video: {output_video}")
-        print(f"- 3D visualization: {output_visualization}")
         print(f"- Landmarks data: {output_video.replace('.mp4', '_landmarks.json')}")
         
     except Exception as e:
