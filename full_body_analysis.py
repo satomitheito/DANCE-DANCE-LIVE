@@ -8,6 +8,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import os
+import subprocess
+import tempfile
 from typing import List, Tuple, Dict, Optional
 import json
 from datetime import datetime
@@ -253,6 +255,58 @@ class FullBodyAnalyzer:
         print(f"Video processing complete. Output saved to: {output_path}")
         return analysis_results
     
+    def check_ffmpeg_available(self) -> bool:
+        """Check if ffmpeg is available on the system"""
+        try:
+            result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False
+    
+    def add_audio_to_video(self, video_path: str, audio_source_path: str, output_path: str) -> bool:
+        """Add audio from source video to the processed video using ffmpeg"""
+        if not self.check_ffmpeg_available():
+            print("ffmpeg not found. Please install ffmpeg to add audio to videos.")
+            print("Install with: brew install ffmpeg (on macOS) or apt install ffmpeg (on Ubuntu)")
+            return False
+            
+        try:
+            # Create a temporary file for the final output
+            temp_output = output_path.replace('.mp4', '_temp.mp4')
+            
+            # Use ffmpeg to combine video and audio
+            cmd = [
+                'ffmpeg',
+                '-i', video_path,  # Input video (no audio)
+                '-i', audio_source_path,  # Input audio source
+                '-c:v', 'copy',  # Copy video stream without re-encoding
+                '-c:a', 'aac',  # Encode audio as AAC
+                '-map', '0:v:0',  # Use video from first input
+                '-map', '1:a:0',  # Use audio from second input
+                '-shortest',  # End when shortest stream ends
+                '-y',  # Overwrite output file
+                temp_output
+            ]
+            
+            print("Adding audio to video...")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Replace the original file with the audio-enhanced version
+                os.replace(temp_output, output_path)
+                print(f"Audio successfully added to: {output_path}")
+                return True
+            else:
+                print(f"Error adding audio: {result.stderr}")
+                # Clean up temp file if it exists
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                return False
+                
+        except Exception as e:
+            print(f"Error adding audio: {e}")
+            return False
+    
 
 
 def main():
@@ -280,6 +334,15 @@ def main():
         print(f"Frames with pose detected: {results['overall_metrics']['total_frames_with_pose']}")
         print(f"Pose detection rate: {results['overall_metrics']['pose_detection_rate']:.2%}")
         print(f"Average visibility score: {results['overall_metrics']['average_visibility']:.3f}")
+        
+        # Add audio to the annotated video
+        print("\nAdding audio to annotated video...")
+        audio_added = analyzer.add_audio_to_video(output_video, input_video, output_video)
+        
+        if audio_added:
+            print("✅ Audio successfully added to annotated video!")
+        else:
+            print("⚠️  Could not add audio (ffmpeg may not be installed)")
         
         print(f"\nAnalysis complete! Check the following files:")
         print(f"- Annotated video: {output_video}")
