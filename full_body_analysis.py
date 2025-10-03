@@ -54,53 +54,54 @@ class FullBodyAnalyzer:
             return None
     
     def draw_landmarks(self, frame: np.ndarray, landmarks: np.ndarray, 
-                      confidence_threshold: float = 0.5) -> np.ndarray:
+                      confidence_threshold: float = 0.1) -> np.ndarray:
         """Draw pose landmarks on the frame with custom styling"""
         annotated_frame = frame.copy()
+        
+        # Get frame dimensions
+        h, w, _ = frame.shape
         
         # Define landmark connections for drawing
         connections = self.mp_pose.POSE_CONNECTIONS
         
-        # Draw connections
+        # Draw connections first (so they appear behind landmarks)
         for connection in connections:
             start_idx, end_idx = connection
             if (start_idx < len(landmarks) and end_idx < len(landmarks) and
                 landmarks[start_idx][2] > confidence_threshold and 
                 landmarks[end_idx][2] > confidence_threshold):
                 
-                # Get frame dimensions
-                h, w, _ = frame.shape
-                
                 # Convert normalized coordinates to pixel coordinates
                 start_point = (int(landmarks[start_idx][0] * w), int(landmarks[start_idx][1] * h))
                 end_point = (int(landmarks[end_idx][0] * w), int(landmarks[end_idx][1] * h))
                 
                 # Draw line
-                cv2.line(annotated_frame, start_point, end_point, (0, 255, 0), 2)
+                cv2.line(annotated_frame, start_point, end_point, (0, 255, 0), 3)
         
         # Draw landmarks as circles
         for i, landmark in enumerate(landmarks):
             if landmark[2] > confidence_threshold:  # Check visibility
-                h, w, _ = frame.shape
                 x = int(landmark[0] * w)
                 y = int(landmark[1] * h)
                 
                 # Different colors for different body parts
                 if i in [11, 12, 13, 14, 15, 16]:  # Arms
-                    color = (255, 0, 0)  # Red
+                    color = (0, 0, 255)  # Red (BGR format)
                 elif i in [23, 24, 25, 26, 27, 28]:  # Legs
-                    color = (0, 0, 255)  # Blue
+                    color = (255, 0, 0)  # Blue (BGR format)
                 elif i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:  # Face and shoulders
-                    color = (255, 255, 0)  # Yellow
+                    color = (0, 255, 255)  # Yellow (BGR format)
                 else:  # Torso
-                    color = (255, 0, 255)  # Magenta
+                    color = (255, 0, 255)  # Magenta (BGR format)
                 
-                # Draw circle
-                cv2.circle(annotated_frame, (x, y), 5, color, -1)
+                # Draw larger circle with outline
+                cv2.circle(annotated_frame, (x, y), 8, (255, 255, 255), -1)  # White background
+                cv2.circle(annotated_frame, (x, y), 8, color, 2)  # Colored outline
                 
                 # Add landmark number
-                cv2.putText(annotated_frame, str(i), (x + 10, y - 10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
+                cv2.putText(annotated_frame, str(i), (x + 12, y - 12), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
         
         return annotated_frame
     
@@ -188,11 +189,12 @@ class FullBodyAnalyzer:
                     # Store landmarks data
                     self.landmarks_data.append(landmarks)
                     
+                    
                     # Analyze pose quality
                     pose_metrics = self.analyze_pose_quality(landmarks)
                     
                     # Draw landmarks on frame
-                    annotated_frame = self.draw_landmarks(frame, landmarks)
+                    annotated_frame = self.draw_landmarks(frame, landmarks, confidence_threshold=-1.0)
                     
                     # Add analysis info to frame
                     info_text = f"Frame: {frame_count}/{total_frames}"
