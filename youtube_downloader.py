@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 try:
-    import yt_dlp
+    import yt_dlphe 
 except ImportError:
     print("Error: yt-dlp is not installed. Please install it using:")
     print("pip install yt-dlp")
