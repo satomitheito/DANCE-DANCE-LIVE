@@ -202,6 +202,9 @@ class RealtimePoseTracker:
                     print("Error: Could not read from camera")
                     break
                 
+                # Flip camera horizontally for mirror effect
+                frame = cv2.flip(frame, 1)
+                
                 self.total_frames += 1
                 
                 # Calculate FPS
