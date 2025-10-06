@@ -52,6 +52,12 @@ class PoseScorer:
         self.audio_process = None
         self.audio_started = False
         
+        # Display settings
+        self.fullscreen = False
+        self.window_created = False
+        self.optimal_width = 1920  # Default to 1920x1080
+        self.optimal_height = 1080
+        
         # Camera setup
         self.camera_index = camera_index
         self.cap = None
@@ -69,10 +75,33 @@ class PoseScorer:
         
         # Auto-advance settings
         self.auto_advance = True
-        self.frame_advance_interval = 2  # Advance every 2 frames (0.07 seconds at 30fps) - Much faster!
+        self.frame_advance_interval = 1.0/30.0  # 30 FPS (original video speed)
         self.frames_since_advance = 0
+        self.last_advance_time = time.time()
+        
+        # Frame skipping settings
+        self.frame_skip = 2  # Start with 2x speed (skip every 2nd frame)
+        self.skip_increment = 1  # Increase/decrease by 1 for smoother changes
+        
+        # Get original video FPS
+        if self.video_cap:
+            self.original_fps = self.video_cap.get(cv2.CAP_PROP_FPS)
+            if self.original_fps > 0:
+                self.frame_advance_interval = 1.0 / self.original_fps
+                print(f"Original video FPS: {self.original_fps:.1f}")
+            else:
+                self.original_fps = 30.0
+        else:
+            self.original_fps = 30.0
         
         print(f"Loaded {self.total_recorded_frames} frames of recorded pose data")
+    
+    def get_optimal_screen_size(self):
+        """Get optimal screen size for display"""
+        # Use a large but reasonable size for most screens
+        self.optimal_width = 1600
+        self.optimal_height = 900
+        print(f"Using optimized size: {self.optimal_width}x{self.optimal_height}")
     
     def load_landmarks_data(self, landmarks_file: str) -> List[np.ndarray]:
         """Load landmarks data from JSON file"""
@@ -122,14 +151,26 @@ class PoseScorer:
         # Calculate multiple similarity metrics
         similarities = []
         
-        # 1. Cosine similarity (overall pose shape)
-        live_flat = live_normalized.flatten()
-        recorded_flat = recorded_normalized.flatten()
-        cosine_sim = 1 - cosine(live_flat, recorded_flat)
-        similarities.append(max(0, cosine_sim))
+        # 1. Cosine similarity (nose + body pose shape, excluding other face landmarks)
+        # Include nose (0) and body landmarks (11+), skip other face landmarks (1-10)
+        if len(live_normalized) > 10 and len(recorded_normalized) > 10:
+            # Create arrays with nose + body landmarks only
+            live_filtered = np.vstack([live_normalized[0:1], live_normalized[11:]])  # Nose + body
+            recorded_filtered = np.vstack([recorded_normalized[0:1], recorded_normalized[11:]])  # Nose + body
+            live_flat = live_filtered.flatten()
+            recorded_flat = recorded_filtered.flatten()
+            cosine_sim = 1 - cosine(live_flat, recorded_flat)
+            similarities.append(max(0, cosine_sim))
+        else:
+            # Fallback to full pose if not enough landmarks
+            live_flat = live_normalized.flatten()
+            recorded_flat = recorded_normalized.flatten()
+            cosine_sim = 1 - cosine(live_flat, recorded_flat)
+            similarities.append(max(0, cosine_sim))
         
-        # 2. Key point distance similarity
-        key_points = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]  # Important joints
+        # 2. Key point distance similarity (nose + body joints only)
+        # Include nose (0) and body joints (11+), skip other face landmarks (1-10)
+        key_points = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]  # Nose + body joints
         key_distances = []
         for i in key_points:
             if i < len(live_normalized) and i < len(recorded_normalized):
@@ -245,11 +286,11 @@ class PoseScorer:
         """Calculate similarities for different body parts"""
         similarities = []
         
-        # Define body part groups
+        # Define body part groups (excluding face landmarks)
         body_parts = {
             'arms': [11, 12, 13, 14, 15, 16],
             'legs': [23, 24, 25, 26, 27, 28],
-            'torso': [11, 12, 23, 24, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            'torso': [11, 12, 23, 24]  # Only body joints, no face
         }
         
         for part_name, indices in body_parts.items():
@@ -345,8 +386,13 @@ class PoseScorer:
             print("🔇 Audio stopped!")
     
     def advance_frame(self):
-        """Advance to next recorded frame"""
-        self.current_frame_index = (self.current_frame_index + 1) % self.total_recorded_frames
+        """Advance to next recorded frame with skipping"""
+        # Skip frames based on frame_skip setting
+        self.current_frame_index = self.current_frame_index + self.frame_skip
+        # Don't loop - stop when we reach the end
+        if self.current_frame_index >= self.total_recorded_frames:
+            self.current_frame_index = self.total_recorded_frames - 1  # Stay at last frame
+        self.last_advance_time = time.time()
     
     def calculate_fps(self) -> float:
         """Calculate current FPS"""
@@ -367,10 +413,14 @@ class PoseScorer:
         h, w, _ = frame.shape
         
         if landmarks is not None and len(landmarks) > 0:
-            # Draw connections
+            # Draw connections (skip face connections)
             connections = self.mp_pose.POSE_CONNECTIONS
             for connection in connections:
                 start_idx, end_idx = connection
+                # Skip connections involving face landmarks (1-10), but allow nose (0)
+                if (start_idx > 0 and start_idx <= 10) or (end_idx > 0 and end_idx <= 10):
+                    continue
+                    
                 if (start_idx < len(landmarks) and end_idx < len(landmarks)):
                     start_point = (int(landmarks[start_idx][0] * w), int(landmarks[start_idx][1] * h))
                     end_point = (int(landmarks[end_idx][0] * w), int(landmarks[end_idx][1] * h))
@@ -380,16 +430,22 @@ class PoseScorer:
                         0 <= end_point[0] < w and 0 <= end_point[1] < h):
                         cv2.line(annotated_frame, start_point, end_point, color, 2)
             
-            # Draw landmarks
+            # Draw landmarks (nose + body landmarks only)
             for i, landmark in enumerate(landmarks):
+                # Only draw nose (0) and body landmarks (11+)
+                if i > 0 and i <= 10:
+                    continue
+                    
                 x = int(landmark[0] * w)
                 y = int(landmark[1] * h)
                 
                 # Check if point is within frame bounds
                 if 0 <= x < w and 0 <= y < h:
-                    # Draw larger circles for better visibility
-                    cv2.circle(annotated_frame, (x, y), 6, (255, 255, 255), -1)  # White background
-                    cv2.circle(annotated_frame, (x, y), 6, color, 2)  # Colored outline
+                    if i == 0:  # Nose - small dot
+                        cv2.circle(annotated_frame, (x, y), 3, color, -1)  # Small dot for nose
+                    else:  # Body landmarks - larger circles
+                        cv2.circle(annotated_frame, (x, y), 6, (255, 255, 255), -1)  # White background
+                        cv2.circle(annotated_frame, (x, y), 6, color, 2)  # Colored outline
         
         return annotated_frame
     
@@ -400,10 +456,14 @@ class PoseScorer:
         h, w, _ = frame.shape
         
         if landmarks is not None and len(landmarks) > 0:
-            # Draw connections
+            # Draw connections (skip face connections)
             connections = self.mp_pose.POSE_CONNECTIONS
             for connection in connections:
                 start_idx, end_idx = connection
+                # Skip connections involving face landmarks (1-10), but allow nose (0)
+                if (start_idx > 0 and start_idx <= 10) or (end_idx > 0 and end_idx <= 10):
+                    continue
+                    
                 if (start_idx < len(landmarks) and end_idx < len(landmarks)):
                     start_point = (int(landmarks[start_idx][0] * w), int(landmarks[start_idx][1] * h))
                     end_point = (int(landmarks[end_idx][0] * w), int(landmarks[end_idx][1] * h))
@@ -413,15 +473,21 @@ class PoseScorer:
                         0 <= end_point[0] < w and 0 <= end_point[1] < h):
                         cv2.line(annotated_frame, start_point, end_point, color, 2)
             
-            # Draw landmarks
+            # Draw landmarks (nose + body landmarks only)
             for i, landmark in enumerate(landmarks):
+                # Only draw nose (0) and body landmarks (11+)
+                if i > 0 and i <= 10:
+                    continue
+                    
                 x = int(landmark[0] * w)
                 y = int(landmark[1] * h)
                 
                 # Check if point is within frame bounds
                 if 0 <= x < w and 0 <= y < h:
-                    # Simple hollow circles for reference
-                    cv2.circle(annotated_frame, (x, y), 6, color, 2)  # Hollow circle
+                    if i == 0:  # Nose - small dot
+                        cv2.circle(annotated_frame, (x, y), 2, color, -1)  # Very small dot for nose
+                    else:  # Body landmarks - hollow circles
+                        cv2.circle(annotated_frame, (x, y), 6, color, 2)  # Hollow circle for body
         
         return annotated_frame
     
@@ -498,10 +564,15 @@ class PoseScorer:
         if not self.initialize_camera():
             return
         
+        # Get optimal screen size
+        self.get_optimal_screen_size()
+        
         print("\n🎯 Real-time Pose Scoring Started!")
         print("Press 'q' to quit, 'r' to reset scores, 'n' for next frame, 'p' for previous frame")
         print("Press 'a' to toggle auto-advance, 's' to slow down, 'f' to speed up")
         print("Press 'm' to toggle audio, 'space' to start/stop video")
+        print("Press '+' to increase frame skip, '-' to decrease frame skip")
+        print("Press '1' for 1x speed, '2' for 2x speed, '3' for 3x speed, '4' for 5x speed")
         print("Left = You (Live), Right = Reference (Video)")
         
         # Start audio automatically
@@ -523,13 +594,27 @@ class PoseScorer:
                 # Calculate FPS
                 self.calculate_fps()
                 
-                # Auto-advance to next frame if enabled
-                if self.auto_advance and self.frames_since_advance >= self.frame_advance_interval:
-                    self.advance_frame()
-                    self.frames_since_advance = 0
-                    # Debug: Print frame advancement
-                    if self.total_frames % 60 == 0:  # Every 60 frames
-                        print(f"Auto-advanced to frame {self.current_frame_index}")
+                # Auto-advance to next frame at original video speed
+                if self.auto_advance:
+                    current_time = time.time()
+                    # Advance based on the frame interval (time-based)
+                    if current_time - self.last_advance_time >= self.frame_advance_interval:
+                        old_frame = self.current_frame_index
+                        self.advance_frame()
+                        
+                        # Check if video has ended
+                        if self.current_frame_index >= self.total_recorded_frames - 1:
+                            print(f"\n🎬 Video ended at frame {self.current_frame_index + 1}/{self.total_recorded_frames}")
+                            print(f"📊 Final Results:")
+                            print(f"Average accuracy: {self.avg_score:.1%}")
+                            print(f"Best accuracy: {max(self.scores_history) if self.scores_history else 0:.1%}")
+                            print(f"Total frames processed: {self.total_frames}")
+                            print("\nPress 'q' to quit or 'r' to restart")
+                            self.auto_advance = False  # Stop auto-advancing
+                        
+                        # Debug: Print frame advancement
+                        if self.total_frames % 60 == 0:  # Every 60 frames
+                            print(f"Auto-advanced to frame {self.current_frame_index + 1}/{self.total_recorded_frames}")
                 
                 # Get current recorded pose and video frame
                 recorded_landmarks = self.get_current_recorded_pose()
@@ -559,34 +644,80 @@ class PoseScorer:
                 if live_landmarks is not None:
                     frame = self.draw_landmarks(frame, live_landmarks, (0, 255, 0))  # Green for live
                 
-                # Create split screen
+                # Create split screen with optimal sizing
                 h, w = frame.shape[:2]
                 
-                # Resize both frames to half width
-                live_resized = cv2.resize(frame, (w//2, h))
+                # Calculate optimal dimensions
+                target_height = self.optimal_height
+                target_width = self.optimal_width
+                
+                # Calculate aspect ratio for each side (50/50 split)
+                live_width = target_width // 2
+                video_width = target_width // 2
+                
+                # Resize both frames to optimal dimensions
+                live_resized = cv2.resize(frame, (live_width, target_height))
                 video_resized = None
                 
                 if video_frame is not None:
-                    video_resized = cv2.resize(video_frame, (w//2, h))
+                    video_resized = cv2.resize(video_frame, (video_width, target_height))
                 else:
                     # Create black frame if no video
-                    video_resized = np.zeros((h, w//2, 3), dtype=np.uint8)
-                    cv2.putText(video_resized, "No Video", (w//4 - 50, h//2), 
+                    video_resized = np.zeros((target_height, video_width, 3), dtype=np.uint8)
+                    cv2.putText(video_resized, "No Video", (video_width//2 - 50, target_height//2), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 
                 # Combine frames side by side
                 split_frame = np.hstack((live_resized, video_resized))
                 
-                # Add labels
-                cv2.putText(split_frame, "YOU (Live)", (10, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(split_frame, "REFERENCE (Video)", (w//2 + 10, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                # Scale text size based on screen size
+                total_width = live_width + video_width
+                scale_factor = max(1.0, total_width / 1200)  # Scale up for larger screens
+                font_scale = 1.0 * scale_factor
+                thickness = int(2 * scale_factor)
                 
-                # Draw scoring overlay on split frame
-                split_frame = self.draw_scoring_overlay(split_frame, live_landmarks, recorded_landmarks, score)
+                # Add labels with larger text
+                cv2.putText(split_frame, "YOU (Live)", (20, int(50 * scale_factor)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), thickness)
+                cv2.putText(split_frame, "REFERENCE (Video)", (live_width + 20, int(50 * scale_factor)), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 0, 0), thickness)
                 
-                # Display split frame
+                # Simple accuracy percentage in top right with larger text
+                accuracy_text = f"Accuracy: {score:.1%}"
+                text_size = cv2.getTextSize(accuracy_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+                text_x = total_width - text_size[0] - 30
+                text_y = int(60 * scale_factor)
+                
+                # Draw background rectangle for text
+                cv2.rectangle(split_frame, (text_x - 15, text_y - int(40 * scale_factor)), 
+                             (text_x + text_size[0] + 15, text_y + int(15 * scale_factor)), (0, 0, 0), -1)
+                cv2.putText(split_frame, accuracy_text, (text_x, text_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
+                
+                # Add frame skip info in bottom right
+                skip_text = f"Skip: {self.frame_skip}x"
+                skip_text_size = cv2.getTextSize(skip_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.7, thickness)[0]
+                skip_x = total_width - skip_text_size[0] - 20
+                skip_y = target_height - 20
+                cv2.putText(split_frame, skip_text, (skip_x, skip_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.7, (200, 200, 200), thickness)
+                
+                # Add video end indicator if video has ended
+                if self.current_frame_index >= self.total_recorded_frames - 1:
+                    end_text = "VIDEO ENDED - Press 'r' to restart or 'q' to quit"
+                    end_text_size = cv2.getTextSize(end_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, thickness)[0]
+                    end_x = (total_width - end_text_size[0]) // 2
+                    end_y = target_height - 60
+                    # Draw background rectangle
+                    cv2.rectangle(split_frame, (end_x - 10, end_y - 30), (end_x + end_text_size[0] + 10, end_y + 10), (0, 0, 0), -1)
+                    cv2.putText(split_frame, end_text, (end_x, end_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (0, 255, 255), thickness)
+                
+                # Display split frame in optimal size
+                if not self.window_created:
+                    cv2.namedWindow('Real-time Pose Scoring - Split Screen', cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow('Real-time Pose Scoring - Split Screen', total_width, target_height)
+                    self.window_created = True
                 cv2.imshow('Real-time Pose Scoring - Split Screen', split_frame)
                 
                 # Handle key presses
@@ -594,10 +725,12 @@ class PoseScorer:
                 if key == ord('q'):
                     break
                 elif key == ord('r'):
-                    # Reset scores
+                    # Reset scores and restart video
                     self.scores_history = []
                     self.avg_score = 0.0
-                    print("Scores reset!")
+                    self.current_frame_index = 0
+                    self.auto_advance = True
+                    print("Scores reset and video restarted!")
                 elif key == ord('n'):
                     # Next frame
                     self.advance_frame()
@@ -612,13 +745,13 @@ class PoseScorer:
                     status = "ON" if self.auto_advance else "OFF"
                     print(f"Auto-advance {status}")
                 elif key == ord('s'):
-                    # Slow down (increase interval)
-                    self.frame_advance_interval = min(60, self.frame_advance_interval + 5)
-                    print(f"Slower: advancing every {self.frame_advance_interval} frames")
+                    # Slow down video (increase time interval)
+                    self.frame_advance_interval = min(2.0, self.frame_advance_interval + 0.05)
+                    print(f"Slower: {1.0/self.frame_advance_interval:.1f} FPS")
                 elif key == ord('f'):
-                    # Speed up (decrease interval)
-                    self.frame_advance_interval = max(1, self.frame_advance_interval - 1)
-                    print(f"Faster: advancing every {self.frame_advance_interval} frames")
+                    # Speed up video (decrease time interval)
+                    self.frame_advance_interval = max(0.016, self.frame_advance_interval - 0.05)
+                    print(f"Faster: {1.0/self.frame_advance_interval:.1f} FPS")
                 elif key == ord('m'):
                     # Toggle audio
                     if self.audio_started:
@@ -630,6 +763,26 @@ class PoseScorer:
                     self.auto_advance = not self.auto_advance
                     status = "ON" if self.auto_advance else "OFF"
                     print(f"Video playback {status}")
+                elif key == ord('+') or key == ord('='):  # Plus key
+                    # Increase frame skip
+                    self.frame_skip = min(8, self.frame_skip + self.skip_increment)
+                    print(f"Frame skip: {self.frame_skip}x (skipping every {self.frame_skip} frames)")
+                elif key == ord('-') or key == ord('_'):  # Minus key
+                    # Decrease frame skip
+                    self.frame_skip = max(1, self.frame_skip - self.skip_increment)
+                    print(f"Frame skip: {self.frame_skip}x (skipping every {self.frame_skip} frames)")
+                elif key == ord('1'):  # 1x speed
+                    self.frame_skip = 1
+                    print("Speed: 1x (normal speed)")
+                elif key == ord('2'):  # 2x speed
+                    self.frame_skip = 2
+                    print("Speed: 2x (fast)")
+                elif key == ord('3'):  # 3x speed
+                    self.frame_skip = 3
+                    print("Speed: 3x (faster)")
+                elif key == ord('4'):  # 5x speed
+                    self.frame_skip = 5
+                    print("Speed: 5x (very fast)")
         
         except KeyboardInterrupt:
             print("\nInterrupted by user")

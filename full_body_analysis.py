@@ -66,9 +66,13 @@ class FullBodyAnalyzer:
         # Define landmark connections for drawing
         connections = self.mp_pose.POSE_CONNECTIONS
         
-        # Draw connections first (so they appear behind landmarks)
+        # Draw connections first (so they appear behind landmarks) - skip face connections except nose
         for connection in connections:
             start_idx, end_idx = connection
+            # Skip connections involving face landmarks (1-10), but allow nose (0)
+            if (start_idx > 0 and start_idx <= 10) or (end_idx > 0 and end_idx <= 10):
+                continue
+                
             if (start_idx < len(landmarks) and end_idx < len(landmarks) and
                 landmarks[start_idx][2] > confidence_threshold and 
                 landmarks[end_idx][2] > confidence_threshold):
@@ -80,29 +84,36 @@ class FullBodyAnalyzer:
                 # Draw line
                 cv2.line(annotated_frame, start_point, end_point, (0, 255, 0), 3)
         
-        # Draw landmarks as circles
+        # Draw landmarks as circles (nose + body only)
         for i, landmark in enumerate(landmarks):
+            # Only draw nose (0) and body landmarks (11+)
+            if i > 0 and i <= 10:
+                continue
+                
             if landmark[2] > confidence_threshold:  # Check visibility
                 x = int(landmark[0] * w)
                 y = int(landmark[1] * h)
                 
                 # Different colors for different body parts
-                if i in [11, 12, 13, 14, 15, 16]:  # Arms
+                if i == 0:  # Nose
+                    color = (0, 255, 255)  # Yellow (BGR format)
+                elif i in [11, 12, 13, 14, 15, 16]:  # Arms
                     color = (0, 0, 255)  # Red (BGR format)
                 elif i in [23, 24, 25, 26, 27, 28]:  # Legs
                     color = (255, 0, 0)  # Blue (BGR format)
-                elif i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:  # Face and shoulders
-                    color = (0, 255, 255)  # Yellow (BGR format)
                 else:  # Torso
                     color = (255, 0, 255)  # Magenta (BGR format)
                 
-                # Draw larger circle with outline
-                cv2.circle(annotated_frame, (x, y), 8, (255, 255, 255), -1)  # White background
-                cv2.circle(annotated_frame, (x, y), 8, color, 2)  # Colored outline
+                if i == 0:  # Nose - small dot
+                    cv2.circle(annotated_frame, (x, y), 4, color, -1)  # Small dot for nose
+                else:  # Body landmarks - larger circles
+                    cv2.circle(annotated_frame, (x, y), 8, (255, 255, 255), -1)  # White background
+                    cv2.circle(annotated_frame, (x, y), 8, color, 2)  # Colored outline
                 
-                # Add landmark number
-                cv2.putText(annotated_frame, str(i), (x + 12, y - 12), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                # Add landmark number for body landmarks only
+                if i != 0:
+                    cv2.putText(annotated_frame, str(i), (x + 12, y - 12), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         
         
         return annotated_frame
