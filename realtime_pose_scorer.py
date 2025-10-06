@@ -58,6 +58,10 @@ class PoseScorer:
         self.optimal_width = 1920  # Default to 1920x1080
         self.optimal_height = 1080
         
+        # Feedback smoothing
+        self.feedback_history = []
+        self.feedback_smoothing_window = 10  # Average over last 10 scores
+        
         # Camera setup
         self.camera_index = camera_index
         self.cap = None
@@ -102,6 +106,34 @@ class PoseScorer:
         self.optimal_width = 1600
         self.optimal_height = 900
         print(f"Using optimized size: {self.optimal_width}x{self.optimal_height}")
+    
+    def get_user_feedback(self, score: float) -> Tuple[str, Tuple[int, int, int]]:
+        """Get user-friendly feedback based on smoothed score"""
+        # Add current score to history
+        self.feedback_history.append(score)
+        
+        # Keep only recent scores for smoothing
+        if len(self.feedback_history) > self.feedback_smoothing_window:
+            self.feedback_history.pop(0)
+        
+        # Calculate smoothed score
+        smoothed_score = np.mean(self.feedback_history)
+        
+        # Get feedback based on smoothed score
+        if smoothed_score >= 0.8:  # 80% or higher
+            return "PERFECT!", (0, 255, 0)  # Green
+        elif smoothed_score >= 0.7:  # 70-79%
+            return "EXCELLENT!", (0, 255, 100)  # Light green
+        elif smoothed_score >= 0.6:  # 60-69%
+            return "GREAT!", (100, 255, 0)  # Yellow-green
+        elif smoothed_score >= 0.5:  # 50-59%
+            return "GOOD!", (255, 255, 0)  # Yellow
+        elif smoothed_score >= 0.4:  # 40-49%
+            return "OKAY", (255, 165, 0)  # Orange
+        elif smoothed_score >= 0.3:  # 30-39%
+            return "KEEP TRYING", (255, 100, 0)  # Red-orange
+        else:  # Below 30%
+            return "FOCUS UP!", (255, 0, 0)  # Red
     
     def load_landmarks_data(self, landmarks_file: str) -> List[np.ndarray]:
         """Load landmarks data from JSON file"""
@@ -683,16 +715,27 @@ class PoseScorer:
                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 0, 0), thickness)
                 
                 # Simple accuracy percentage in top right with larger text
-                accuracy_text = f"Accuracy: {score:.1%}"
-                text_size = cv2.getTextSize(accuracy_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
-                text_x = total_width - text_size[0] - 30
-                text_y = int(60 * scale_factor)
+                # User-friendly feedback system
+                feedback_text, feedback_color = self.get_user_feedback(score)
                 
-                # Draw background rectangle for text
-                cv2.rectangle(split_frame, (text_x - 15, text_y - int(40 * scale_factor)), 
-                             (text_x + text_size[0] + 15, text_y + int(15 * scale_factor)), (0, 0, 0), -1)
-                cv2.putText(split_frame, accuracy_text, (text_x, text_y), 
-                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
+                # Main feedback text (large and prominent)
+                feedback_size = cv2.getTextSize(feedback_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale * 1.5, thickness * 2)[0]
+                feedback_x = (total_width - feedback_size[0]) // 2
+                feedback_y = int(80 * scale_factor)
+                
+                # Draw background rectangle for feedback
+                cv2.rectangle(split_frame, (feedback_x - 20, feedback_y - int(50 * scale_factor)), 
+                             (feedback_x + feedback_size[0] + 20, feedback_y + int(20 * scale_factor)), (0, 0, 0), -1)
+                cv2.putText(split_frame, feedback_text, (feedback_x, feedback_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale * 1.5, feedback_color, thickness * 2)
+                
+                # Accuracy percentage (smaller, in top right)
+                accuracy_text = f"{score:.0%}"
+                acc_size = cv2.getTextSize(accuracy_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, thickness)[0]
+                acc_x = total_width - acc_size[0] - 20
+                acc_y = int(40 * scale_factor)
+                cv2.putText(split_frame, accuracy_text, (acc_x, acc_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.8, (200, 200, 200), thickness)
                 
                 # Add frame skip info in bottom right
                 skip_text = f"Skip: {self.frame_skip}x"
