@@ -173,9 +173,24 @@ class FullBodyAnalyzer:
         
         print(f"Video properties: {width}x{height}, {fps} FPS, {total_frames} frames")
         
-        # Setup video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        # Setup video writer - use H.264 for better compatibility
+        # Try different codecs in order of preference
+        codecs = ['avc1', 'H264', 'X264', 'mp4v']
+        out = None
+
+        for codec in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                if out.isOpened():
+                    print(f"Using codec: {codec}")
+                    break
+                out.release()
+            except:
+                continue
+
+        if out is None or not out.isOpened():
+            raise ValueError("Could not initialize video writer with any codec")
         
         frame_count = 0
         analysis_results = {
@@ -326,8 +341,8 @@ def main():
     analyzer = FullBodyAnalyzer()
     
     # Input and output paths
-    input_video = "/Users/satomi/Documents/GitHub/DANCE-DANCE-LIVE/downloads/test.mp4"
-    output_video = "/Users/satomi/Documents/GitHub/DANCE-DANCE-LIVE/analyzed_pose_video.mp4"
+    input_video = "downloads/test.mp4"
+    output_video = "analyzed_pose_video.mp4"
     
     # Check if input video exists
     if not os.path.exists(input_video):

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dance Dance Live 💃</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>💃 Dance Dance Live</h1>
+            <p>Match the moves and score points!</p>
+        </header>
+
+        <div class="controls">
+            <button id="startBtn" class="btn btn-primary">▶️ Start Dancing</button>
+            <button id="resetBtn" class="btn btn-secondary">🔄 Reset</button>
+        </div>
+
+        <div class="status-bar">
+            <span id="statusText">Ready to dance!</span>
+            <span id="timer">0:00</span>
+        </div>
+
+        <div class="video-container">
+            <div class="video-panel">
+                <h3>Reference</h3>
+                <video id="referenceVideo" playsinline preload="auto" controls>
+                    <source src="{{ url_for('serve_video', filename='analyzed_pose_video.mp4') }}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+
+            <div class="video-panel">
+                <h3>Your Performance</h3>
+                <video id="webcamVideo" autoplay playsinline muted></video>
+                <canvas id="webcamCanvas" style="display: none;"></canvas>
+            </div>
+        </div>
+
+        <div class="score-display">
+            <div class="score-main">
+                <div class="score-value" id="currentScore">0</div>
+                <div class="score-label">Score</div>
+            </div>
+            <div class="score-details">
+                <div class="score-item">
+                    <span class="label">Angles</span>
+                    <span class="value" id="angleScore">0</span>
+                </div>
+                <div class="score-item">
+                    <span class="label">Orientation</span>
+                    <span class="value" id="orientationScore">0</span>
+                </div>
+                <div class="score-item">
+                    <span class="label">Extension</span>
+                    <span class="value" id="extensionScore">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="resultsContainer" style="display: none;">
+            <h2>📊 Your Performance</h2>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-value" id="avgScore">0</div>
+                    <div class="stat-label">Average Score</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="bestScore">0</div>
+                    <div class="stat-label">Best Score</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="framesScored">0</div>
+                    <div class="stat-label">Frames Scored</div>
+                </div>
+            </div>
+            <canvas id="scoreChart"></canvas>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
